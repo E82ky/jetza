@@ -1,0 +1,190 @@
+
+name: Build KP NEXUS 2 APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Install Android SDK
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Check App Files
+        run: |
+          test -f index.html
+          test -f "Launch Sequence.mp3"
+
+      - name: Create Android Project
+        run: |
+          mkdir -p app/src/main/assets
+          mkdir -p app/src/main/java/com/kpnexus/app
+
+          cp index.html app/src/main/assets/index.html
+          cp "Launch Sequence.mp3" app/src/main/assets/intro.mp3
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "KPNexus2"
+          include ':app'
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.kpnexus.app'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.kpnexus.app'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 1
+                  versionName '2.0'
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.webkit:webkit:1.12.1'
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <application
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar"
+                  android:label="KP NEXUS 2"
+                  android:usesCleartextTraffic="false">
+                  <activity
+                      android:name=".MainActivity"
+                      android:screenOrientation="portrait"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/kpnexus/app/MainActivity.java <<'EOF'
+          package com.kpnexus.app;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import androidx.webkit.WebViewAssetLoader;
+
+          public class MainActivity extends Activity {
+              private WebView webView;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  setRequestedOrientation(
+                      android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                  );
+
+                  webView = new WebView(this);
+                  setContentView(webView);
+
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setMediaPlaybackRequiresUserGesture(true);
+
+                  WebViewAssetLoader loader =
+                      new WebViewAssetLoader.Builder()
+                          .addPathHandler(
+                              "/assets/",
+                              new WebViewAssetLoader.AssetsPathHandler(this)
+                          )
+                          .build();
+
+                  webView.setWebViewClient(
+                      new androidx.webkit.WebViewClientCompat() {
+                          @Override
+                          public android.webkit.WebResourceResponse
+                          shouldInterceptRequest(
+                              WebView view,
+                              android.webkit.WebResourceRequest request
+                          ) {
+                              return loader.shouldInterceptRequest(
+                                  request.getUrl()
+                              );
+                          }
+                      }
+                  );
+
+                  webView.loadUrl(
+                      "https://appassets.androidplatform.net/assets/index.html"
+                  );
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (webView != null && webView.canGoBack()) {
+                      webView.goBack();
+                  } else {
+                      super.onBackPressed();
+                  }
+              }
+          }
+          EOF
+
+      - name: Build APK
+        run: gradle assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: KP-NEXUS-2-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
